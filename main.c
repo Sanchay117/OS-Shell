@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <signal.h>
 #include <string.h>
+#include <stdbool.h>
+#include <sys/wait.h>
 
 #define MAX_ARGS 64
 
@@ -124,9 +126,104 @@ char* read_user_input(){
 //     return status;
 // }
 
+char** split_command(char *command) {
+    // Step 1: Split by '|'
+    char **commands = malloc(64 * sizeof(char*)); // Array to hold commands
+    char *token;
+    int cmd_count = 0;
+
+    // Tokenize using '|'
+    token = strtok(command, "|");
+    while (token != NULL) {
+        commands[cmd_count++] = token; // Store each command
+        token = strtok(NULL, "|");
+    }
+    commands[cmd_count] = NULL; // Null-terminate the array of commands
+
+    // Step 2: Split each command by spaces and store the arguments
+    char **args = malloc(128 * sizeof(char*)); // Array to hold all arguments, assume 128 max
+    int ptr = 0;
+    
+    for (int i = 0; i < cmd_count; i++) {
+        // Tokenize each command by spaces
+        token = strtok(commands[i], " ");
+        while (token != NULL) {
+            args[ptr++] = token;  // Store the argument
+            token = strtok(NULL, " ");
+        }
+        // if (i < cmd_count - 1) {
+        //     args[ptr++] = "|";  // Add a pipe symbol between commands
+        // }
+    }
+
+    args[ptr] = NULL; // Null-terminate the args array
+    free(commands); // Free the commands array as it's no longer needed
+
+    return args; // Return the array of arguments
+}
+
+int piped_process(char* command){
+    // Assume Input Is Sanitized
+    
+    int status;
+
+    int pipes = 0;
+
+    for(int i = 0;command[i]!='\0';i++){
+        if(command[i]=='|') pipes++;
+    }
+
+    char** args = split_command(command);
+
+    for(int i = 0;args[i]!=NULL;i++){
+        printf("%s\n",args[i]);
+    }
+    
+    int fd[2]; // File descriptors for the pipe
+    int pid;
+    int fds = 0; // To hold the read end of the previous pipe
+
+    while (*args != NULL) {
+        // Create a pipe
+        pipe(fd);
+        if ((pid = fork()) == -1) {
+            perror("fork failed");
+            exit(EXIT_FAILURE);
+        } else if (pid == 0) {
+            // Child process
+            dup2(fds, 0);  // Use the input from the previous command
+            if (*(args + 1) != NULL) {
+                dup2(fd[1], 1);  // Output to the next command
+            }
+            close(fd[0]); // Close unused read end
+            execvp(*args, args);  // Execute the command
+            perror("exec failed");
+            exit(EXIT_FAILURE);
+        } else {
+            // Parent process
+            wait(NULL);  // Wait for the child process to finish
+            close(fd[1]); // Close unused write end
+            fds = fd[0];  // Save the read end of the current pipe for the next command
+            args += 2;    // Move to the next command (assuming the arguments are separated by NULL)
+        }
+    }
+
+}
+
 int create_process_and_run(char* command){
     int pid;
     int status;
+
+    bool pipe = false;
+
+    for(int i = 0;command[i]!='\0';i++){
+        if(command[i]=='|') pipe = true;
+    }
+
+    if(pipe){
+        status = piped_process(command);
+        return status;
+    }
 
     // Determine command type length
     int len_cmnd_type = 0;
@@ -199,12 +296,11 @@ int create_process_and_run(char* command){
     if (pid == 0) {
         // Child Process
         if (execvp(command_type, args) == -1) {
-            perror("execvp failed");
-            exit(EXIT_FAILURE);
+            printf("Invalid Command\n");
+            return 1;
         }
     } else if (pid < 0) {
         perror("Fork Failed");
-        exit(EXIT_FAILURE);
     } else {
         // Parent process waits for the child to finish
         waitpid(pid, &status, 0);
@@ -220,6 +316,8 @@ int create_process_and_run(char* command){
     return status;
 }
 
+// code all good below this line
+
 int launch(char* command){
     int status;
     status = create_process_and_run(command);
@@ -230,8 +328,13 @@ int launch(char* command){
 void shell_loop(){
     int status;
     do {
-        printf("@Sanchay:~$: ");
+        printf("@User:~$: ");
         char* command = read_user_input();
+
+        if(command[0]=='\n'){
+            status = 0;
+            continue; // user just pressed enter
+        }
         
         // Note : command also has a new line character at the end
         // so we remove it
