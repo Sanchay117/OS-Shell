@@ -4,213 +4,284 @@
 #include <string.h>
 #include <stdbool.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #define MAX_ARGS 64
+#define MAX_COMMANDS 2000
+
+char** history[MAX_COMMANDS];
+int history_ptr = 0;
 
 char* read_user_input(){
     char* cmnd;
-    size_t len;
-    getline(&cmnd,&len,stdin);
+    size_t len = 0;
+    size_t read;
+    read = getline(&cmnd, &len, stdin);
+    
+    if (read == -1) {
+        printf("getline failed\n");
+        free(cmnd);
+        return "echo Some Error Occurred";
+    }
+
     return cmnd;
 }
 
-// int create_process_and_run(char* command){
-//     int pid;
-//     int status;
+// work on from here
 
-//     int len_cmnd_type = 0;
+void remove_trailing_spaces(char *str) {
+    int len = strlen(str);
+    while (len > 0 && (str[len - 1] == ' ' || str[len - 1] == '\t')) {
+        len--;
+    }
+    while(&str==' ')str++;
+    str[len] = '\0';
+}
 
-//     for(int i = 0;(command[i]!=' ' && command[i]!='\n' && command[i]!='|');i++){
-//         len_cmnd_type++;
-//     }
+void remove_leading_spaces(char *str) {
+    char *start = str; // Pointer to the beginning of the string
 
-//     int spaces = 0;
-//     for(int i = 0;i!='\0';i++){
-//         if(command[i]==' ')spaces++;
-//     }
+    // Move the pointer forward until a non-space character is found
+    while (*start && isspace((unsigned char)*start)) {
+        start++;
+    }
 
-//     char *command_type = malloc(len_cmnd_type+1);
+    if (start != str) {
+        memmove(str, start, strlen(start) + 1); // Include the null terminator
+    }
+}
 
-//     for(int i = 0;i<len_cmnd_type;i++){
-//         command_type[i]=command[i];
-//     }
+char** split_command_space(char* command){
+    // Determine command type length
+    int len_cmnd_type = 0;
+    for (int i = 0; (command[i] != ' ' && command[i] != '\0'); i++) {
+        len_cmnd_type++;
+    }
 
-//     command_type[len_cmnd_type]='\0';
+    int spaces = 0;
+    for (int i = 0; command[i] != '\0'; i++) { 
+        if (command[i] == ' ') spaces++;
+        if (i>0 && command[i-1]==' ' && command[i]==' ') spaces--;
+        else if(i==0 && command[i]==' ')spaces--;
+    }
 
-//     // printf("%s\n",command_type);
-//     // Now we have extracted Our Command!
-//     // Now To Extract The Arguments
-//     // For Now we assume no "|" in our command
+    char *command_type = malloc(len_cmnd_type + 1);
+    if (command_type == NULL) {
+        printf("Malloc failed\n");
+        exit(1);
+    }
 
-//     int num_args = spaces+1;
-//     // printf("%d\n",num_args);
-//     // char* args[num_args];
-//     // int ptr = 0;
+    // Copy command type
+    for (int i = 0; i < len_cmnd_type; i++) {
+        command_type[i] = command[i];
+    }
+    command_type[len_cmnd_type] = '\0';
+
+    // Extract arguments
+    int num_args = spaces + 1;
+    char** args = malloc((num_args+1)*sizeof(char*));
+    if (args == NULL) {
+        printf("Malloc failed\n");
+        exit(1);
+    }
     
-//     // for(int i = 0;i<num_args;i++){
-//     //     int ptr_ptr = ptr;
-//     //     int len_word = 0;
-//     //     while(command[ptr_ptr]!='\0'){
-//     //         printf("%c\n",command[ptr_ptr]);
-//     //         if(command[ptr_ptr]==' ') break;
-//     //         if(command[ptr_ptr]=='\n') continue;
-//     //         else len_word++;
-//     //         ptr_ptr++;
-//     //     }
-//     //     char* word = malloc(len_word+1);
-//     //     // printf("WORD LEN %d\n",len_word);
-//     //     int i = 0;
-//     //     while(command[ptr]!='\0'){
-//     //         if(command[ptr]==' ') break;
-//     //         if(command[ptr]=='\n') continue;
-//     //         else {
-//     //             word[i] = command[ptr];
-//     //             i++;
-//     //         }
-//     //         ptr++;
-//     //     }
-//     //     word[len_word]='\0';
-//     //     args[i]=word;
-//     // }
+    int ptr = 0;
+    for (int i = 0; i < num_args; i++) {
+        int ptr_ptr = ptr;
+        int len_word = 0;
 
-//     char* args[num_args];
-//     int ptr = 0;
+        // Count the length of the current word
+        while (command[ptr_ptr] != '\0') {
+            if (command[ptr_ptr] == ' ' && len_word!=0) {
+                break;
+            }else if(command[ptr_ptr]==' ' && len_word==0){
+                ptr_ptr++;
+                continue;
+            }
+            len_word++;
+            ptr_ptr++;
+        }
 
-//     for (int i = 0; i < num_args; i++) {
-//         int ptr_ptr = ptr;
-//         int len_word = 0;
+        char* word = malloc(len_word + 1); // Allocate memory for the word + null terminator
+        if (word == NULL) {
+            printf("Malloc failed\n");
+            return 0;
+        }
 
-//         // Count the length of the current word
-//         while (command[ptr_ptr] != '\0') {
-//             if (command[ptr_ptr] == ' ' || command[ptr_ptr] == '\n') break;
-//             len_word++;
-//             ptr_ptr++;
-//         }
+        // Fill the word array
+        for (int j = 0; j < len_word; j++) {
+            while(command[ptr]==' '){
+                ptr++;
+            }
+            word[j] = command[ptr++];
+        }
+        word[len_word] = '\0'; // Null-terminate the string
+        args[i] = word; // Store the word in args
 
-//         char* word = malloc(len_word + 1); // Allocate memory for the word + null terminator
-//         if (word == NULL) {
-//             perror("malloc failed");
-//             exit(EXIT_FAILURE);
-//         }
+        // Skip spaces for the next word
+        while (command[ptr] == ' ') ptr++;
+        if (command[ptr] == '\n') ptr++; // Skip newline if present
+    }
+    args[num_args] = NULL; // Null-terminate the args array
 
-//         // Fill the word array
-//         for (int j = 0; j < len_word; j++) {
-//             word[j] = command[ptr++];
-//         }
-//         word[len_word] = '\0'; // Null-terminate the string
-//         args[i] = word;
-
-//         // Skip the spaces for the next word
-//         while (command[ptr] == ' ') ptr++;
-//         if (command[ptr] == '\n') ptr++; // Skip newline if present
-//     }
-
-//     // for(int i = 0;i<num_args;i++){
-//     //     printf("ARGS:%s\n",args[i]);
-//     // }
-
-//     pid = fork();
-
-//     if(pid==0){
-//         // Child Process
-//         if(execvp(command_type,args)==-1){
-//             printf("execvp Failed\n");
-//         }
-//         exit(1);
-//     }else if(pid<1){
-//         printf("Fork Failed\n");
-//     }else{
-//         wait(pid,&status,0);
-//     }
-
-//     return status;
-// }
+    return args;
+}
 
 char** split_command(char *command) {
-    // Step 1: Split by '|'
-    char **commands = malloc(64 * sizeof(char*)); // Array to hold commands
-    char *token;
-    int cmd_count = 0;
+    // split by |
 
-    // Tokenize using '|'
-    token = strtok(command, "|");
-    while (token != NULL) {
-        commands[cmd_count++] = token; // Store each command
-        token = strtok(NULL, "|");
+    int pipes = 0;
+
+    for(int i = 0;command[i]!='\0';i++){
+        if(command[i]=='|') pipes++;
+        if (i>0 && command[i-1]=='|' && command[i]=='|') pipes--;
+        else if(i==0 && command[i]=='|')pipes--;
     }
-    commands[cmd_count] = NULL; // Null-terminate the array of commands
 
-    // Step 2: Split each command by spaces and store the arguments
-    char **args = malloc(128 * sizeof(char*)); // Array to hold all arguments, assume 128 max
-    int ptr = 0;
+    char** args=malloc((pipes+2)*(sizeof(char*)));
+    if(args==NULL){
+        printf("Malloc Failed\n");
+        return 0;
+    }
+    int num_args = pipes+1;
     
-    for (int i = 0; i < cmd_count; i++) {
-        // Tokenize each command by spaces
-        token = strtok(commands[i], " ");
-        while (token != NULL) {
-            args[ptr++] = token;  // Store the argument
-            token = strtok(NULL, " ");
+    int ptr = 0;
+    for (int i = 0; i < num_args; i++) {
+        int ptr_ptr = ptr;
+        int len_cmnd = 0;
+
+        // Count the length of the current word
+        while (command[ptr_ptr] != '\0') {
+            if (command[ptr_ptr] == '|') {
+                break;
+            }
+            len_cmnd++;
+            ptr_ptr++;
         }
-        // if (i < cmd_count - 1) {
-        //     args[ptr++] = "|";  // Add a pipe symbol between commands
-        // }
+
+        char* word = malloc(len_cmnd + 1); // Allocate memory for the word + null terminator
+        if (word == NULL) {
+            printf("Malloc failed\n");
+            return 0;
+        }
+
+        // Fill the word array
+        for (int j = 0; j < len_cmnd; j++) {
+            word[j] = command[ptr++];
+        }
+        word[len_cmnd] = '\0'; // Null-terminate the string
+        args[i] = word; // Store the word in args
+
+        // Skip spaces for the next word
+        while (command[ptr] == '|') ptr++;
+        if (command[ptr] == '\n') ptr++; // Skip newline if present
     }
 
-    args[ptr] = NULL; // Null-terminate the args array
-    free(commands); // Free the commands array as it's no longer needed
+    args[pipes+1] = NULL;
 
-    return args; // Return the array of arguments
+    return args;
+
+
 }
 
 int piped_process(char* command){
     // Assume Input Is Sanitized
     
     int status;
-
-    int pipes = 0;
-
-    for(int i = 0;command[i]!='\0';i++){
-        if(command[i]=='|') pipes++;
-    }
-
     char** args = split_command(command);
 
-    for(int i = 0;args[i]!=NULL;i++){
-        printf("%s\n",args[i]);
-    }
+    // for(int i = 0;args[i]!=NULL;i++){
+    //     printf("%s\n",args[i]);
+    // }
     
-    int fd[2]; // File descriptors for the pipe
-    int pid;
-    int fds = 0; // To hold the read end of the previous pipe
-
-    while (*args != NULL) {
-        // Create a pipe
-        pipe(fd);
-        if ((pid = fork()) == -1) {
-            perror("fork failed");
-            exit(EXIT_FAILURE);
-        } else if (pid == 0) {
-            // Child process
-            dup2(fds, 0);  // Use the input from the previous command
-            if (*(args + 1) != NULL) {
-                dup2(fd[1], 1);  // Output to the next command
-            }
-            close(fd[0]); // Close unused read end
-            execvp(*args, args);  // Execute the command
-            perror("exec failed");
-            exit(EXIT_FAILURE);
-        } else {
-            // Parent process
-            wait(NULL);  // Wait for the child process to finish
-            close(fd[1]); // Close unused write end
-            fds = fd[0];  // Save the read end of the current pipe for the next command
-            args += 2;    // Move to the next command (assuming the arguments are separated by NULL)
-        }
+    int num_commands = 0;
+    
+    // Count the number of commands
+    while (args[num_commands] != NULL) {
+        num_commands++;
     }
+
+    // printf("%d",num_commands);
+
+    int pipe_fd[2];
+    int pid;
+    int fds = 0; // Variable to keep track of the previous command's output
+
+    for (int i = 0; i < num_commands; i++) {
+        char* comand = strdup(args[i]);
+        remove_leading_spaces(comand);
+        remove_trailing_spaces(comand);
+        char** exec = split_command_space(comand);
+
+        if (i < num_commands - 1) {
+            // Create a pipe for all but the last command
+            if (pipe(pipe_fd) == -1) {
+                perror("Pipe Error");
+                free(comand); // Free dynamically allocated memory
+                return 0;
+            }
+        }
+
+        pid = fork();
+        if(pid==-1){
+            printf("Fork Failure\n");
+            free(comand);
+            return 0;
+        }else if(pid==0){
+            // Child
+            if (fds != 0) {
+                dup2(fds, STDIN_FILENO);  // Get input from the previous command's output
+                close(fds); // Close the old input
+            }
+
+            if (i < num_commands - 1) {
+                dup2(pipe_fd[1], STDOUT_FILENO); // Output to the pipe
+                close(pipe_fd[0]); // Close unused read end
+            }
+
+            if (execvp(exec[0], exec) == -1) {
+                perror("Invalid Command");
+                return 0;
+            }
+        }else{
+            // Parent
+            if (fds != 0) {
+                close(fds); // Close previous input pipe if it exists
+            }
+
+            if (i < num_commands - 1) {
+                close(pipe_fd[1]); // Close write end of the current pipe
+            }
+
+            fds = pipe_fd[0]; // Save read end for the next command
+            waitpid(pid, &status, 0); // Wait for the child process
+        }
+        free(comand); // Free dynamically allocated memory for the command
+        free(exec); // Free the exec array if dynamically allocated
+    }
+
+    return 0;
 
 }
 
 int create_process_and_run(char* command){
+    remove_leading_spaces(command);
+    remove_trailing_spaces(command);
+
+    history[history_ptr] = strdup(command);
+    history_ptr++;
+
+    char* str = "history";
+    if(strcmp(str,command)==0) {
+        history_ptr--;
+        int i = 0;
+        while(i<history_ptr){
+            printf("%s\n",history[i]);
+            i++;
+        }
+        return 0;
+    }
+
     int pid;
     int status;
 
@@ -222,6 +293,7 @@ int create_process_and_run(char* command){
 
     if(pipe){
         status = piped_process(command);
+        // printf("%d",status);
         return status;
     }
 
@@ -241,21 +313,21 @@ int create_process_and_run(char* command){
     char *command_type = malloc(len_cmnd_type + 1);
     if (command_type == NULL) {
         printf("malloc failed\n");
-        exit(1);
+        return 0;
     }
 
     // Copy command type
     for (int i = 0; i < len_cmnd_type; i++) {
         command_type[i] = command[i];
     }
-    command_type[len_cmnd_type] = '\0'; // Null-terminate the string
+    command_type[len_cmnd_type] = '\0';
 
     // Extract arguments
     int num_args = spaces + 1;
-    char** args = malloc((num_args + 1) * sizeof(char*)); // Allocate for arguments
+    char** args = malloc((num_args+1)*sizeof(char*));
     if (args == NULL) {
-        printf("malloc failed\n");
-        exit(1);
+        printf("Malloc failed\n");
+        return 0;
     }
     
     int ptr = 0;
@@ -265,8 +337,11 @@ int create_process_and_run(char* command){
 
         // Count the length of the current word
         while (command[ptr_ptr] != '\0') {
-            if (command[ptr_ptr] == ' ') {
+            if (command[ptr_ptr] == ' ' && len_word!=0) {
                 break;
+            }else if(command[ptr_ptr]==' ' && len_word==0){
+                ptr_ptr++;
+                continue;
             }
             len_word++;
             ptr_ptr++;
@@ -274,12 +349,15 @@ int create_process_and_run(char* command){
 
         char* word = malloc(len_word + 1); // Allocate memory for the word + null terminator
         if (word == NULL) {
-            printf("malloc failed\n");
-            exit(1);
+            printf("Malloc failed\n");
+            return 0;
         }
 
         // Fill the word array
         for (int j = 0; j < len_word; j++) {
+            while(command[ptr]==' '){
+                ptr++;
+            }
             word[j] = command[ptr++];
         }
         word[len_word] = '\0'; // Null-terminate the string
@@ -289,7 +367,7 @@ int create_process_and_run(char* command){
         while (command[ptr] == ' ') ptr++;
         if (command[ptr] == '\n') ptr++; // Skip newline if present
     }
-    args[num_args] = NULL; // Null-terminate the args array for execvp
+    args[num_args] = NULL; // Null-terminate the args array
 
     // Fork and execute the command
     pid = fork();
@@ -297,12 +375,12 @@ int create_process_and_run(char* command){
         // Child Process
         if (execvp(command_type, args) == -1) {
             printf("Invalid Command\n");
-            return 1;
+            return 0;
         }
     } else if (pid < 0) {
-        perror("Fork Failed");
+        printf("Fork Failed\n");
+        return 0;
     } else {
-        // Parent process waits for the child to finish
         waitpid(pid, &status, 0);
     }
 
@@ -344,6 +422,7 @@ void shell_loop(){
         // exit(1);
 
         status = launch(command);
+        free(command);
     }while(status==0);
 }
 
@@ -355,7 +434,7 @@ void exit_shell(){
 int main(int argc,char** argv){
     signal(SIGINT, exit_shell);
 
-    printf("Welcome To My Shell!\n");
+    printf("Welcome To Our Shell!\n");
     shell_loop();
     
     return 0;
