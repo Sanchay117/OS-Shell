@@ -4,13 +4,41 @@
 #include <string.h>
 #include <stdbool.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <unistd.h>
+#include <time.h>
 
 #define MAX_ARGS 64
-#define MAX_COMMANDS 2000
+#define MAX_COMMANDS 20000
 
 char** history[MAX_COMMANDS];
 int history_ptr = 0;
+
+struct CommandDetails {
+    char* command;
+    pid_t pid;
+    struct timeval start_time;
+    struct timeval end_time;
+    double duration;  // Duration in seconds
+};
+
+struct CommandDetails commandDetails[MAX_COMMANDS];
+int process_ptr = 0;
+
+void add_to_history(char* command, pid_t pid, struct timeval start, struct timeval end) {
+    double duration = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1000000.0;
+
+    commandDetails[process_ptr].command = strdup(command);
+    commandDetails[process_ptr].pid = pid;
+    commandDetails[process_ptr].start_time = start;
+    commandDetails[process_ptr].end_time = end;
+    commandDetails[process_ptr].duration = duration;
+    process_ptr++;
+}
+
+void sig_child_handler(int sig){
+    exit(0);
+}
 
 char* read_user_input(){
     char* cmnd;
@@ -184,6 +212,17 @@ char** split_command(char *command) {
 
 }
 
+bool hang(char** args){
+    char* x = strdup(args[0]);
+    if((strcmp(x,"cat")==0 || strcmp(x,"sort")==0 || strcmp(x,"uniq")==0 || strcmp(x,"wc")==0) && args[1]==NULL){
+        return true;
+    }
+
+    if(strcmp(x,"wc")==0 && args[2]==NULL) return false;
+
+    return false;
+}
+
 int piped_process(char* command){
     // Assume Input Is Sanitized
     
@@ -207,6 +246,10 @@ int piped_process(char* command){
     int pid;
     int fds = 0; // Variable to keep track of the previous command's output
 
+    struct timeval start_time, end_time;
+
+    gettimeofday(&start_time, NULL);  // Record start time
+
     for (int i = 0; i < num_commands; i++) {
         char* comand = strdup(args[i]);
         remove_leading_spaces(comand);
@@ -228,6 +271,8 @@ int piped_process(char* command){
             free(comand);
             return 0;
         }else if(pid==0){
+
+            signal(SIGINT,sig_child_handler); // ignore sig_int
             // Child
             if (fds != 0) {
                 dup2(fds, STDIN_FILENO);  // Get input from the previous command's output
@@ -239,10 +284,18 @@ int piped_process(char* command){
                 close(pipe_fd[0]); // Close unused read end
             }
 
-            if (execvp(exec[0], exec) == -1) {
-                perror("Invalid Command");
-                return 0;
+            if (i==0 && hang(exec)) {
+                // No arguments are passed to cat, so we close stdin
+                close(STDIN_FILENO);  // Close stdin to avoid hanging
+                printf("Invalid Command\n");
+                exit(EXIT_FAILURE);
             }
+
+            if (execvp(exec[0], exec) == -1) {
+                printf("Invalid Command\n");
+                exit(EXIT_FAILURE);
+            }
+
         }else{
             // Parent
             if (fds != 0) {
@@ -255,6 +308,9 @@ int piped_process(char* command){
 
             fds = pipe_fd[0]; // Save read end for the next command
             waitpid(pid, &status, 0); // Wait for the child process
+            gettimeofday(&end_time, NULL);  // Record end time
+            // Store details in history
+            add_to_history(command, pid, start_time, end_time);
         }
         free(comand); // Free dynamically allocated memory for the command
         free(exec); // Free the exec array if dynamically allocated
@@ -369,10 +425,31 @@ int create_process_and_run(char* command){
     }
     args[num_args] = NULL; // Null-terminate the args array
 
+    struct timeval start_time, end_time;
+
+    gettimeofday(&start_time, NULL);  // Record start time
+
+    bool amp = false;
+    if(command_type[0]=='&') amp = true;
+    if(amp){
+        for(int i = 0;command_type[i]!='\0';i++){
+           command_type[i]=command_type[i+1];
+        }
+        int len = strlen(command_type);
+        command_type[len] = '\0';
+    }
+
     // Fork and execute the command
     pid = fork();
     if (pid == 0) {
         // Child Process
+        signal(SIGINT,sig_child_handler); // ignore sig_int
+
+        if (hang(args)) {
+            printf("Invalid Command\n");
+            return 0;
+        }
+
         if (execvp(command_type, args) == -1) {
             printf("Invalid Command\n");
             return 0;
@@ -381,7 +458,16 @@ int create_process_and_run(char* command){
         printf("Fork Failed\n");
         return 0;
     } else {
-        waitpid(pid, &status, 0);
+        if(!amp){
+            waitpid(pid, &status, 0);
+            gettimeofday(&end_time, NULL);  // Record end time
+            // Store details in history
+            add_to_history(command, pid, start_time, end_time);
+        }else{
+            printf("Process running in background with ID: %d\n", pid);
+            fflush(stdout);
+            status = 0;
+        }
     }
 
     // Free allocated memory
@@ -428,6 +514,23 @@ void shell_loop(){
 
 void exit_shell(){
     printf("\nExiting!\n");
+    printf("-----------------------------------\n");
+    printf("Command History:\n");
+    printf("-----------------------------------\n");
+    for (int i = 0; i < process_ptr; i++) {
+        struct CommandDetails cmd = commandDetails[i];
+
+        // Convert start time to a readable format
+        struct tm* start_tm = localtime(&cmd.start_time.tv_sec);
+        char start_str[30];
+        strftime(start_str, 30, "%Y-%m-%d %H:%M:%S", start_tm);
+
+        printf("Command: %s\n", cmd.command);
+        printf("PID: %d\n", cmd.pid);
+        printf("Start Time: %s\n", start_str);
+        printf("Duration: %.8f seconds\n", cmd.duration);
+        printf("-----------------------------------\n");
+    }
     exit(0);
 }
 
