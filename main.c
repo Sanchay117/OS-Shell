@@ -20,12 +20,13 @@ struct CommandDetails {
     struct timeval start_time;
     struct timeval end_time;
     double duration;  // Duration in seconds
+    int status;
 };
 
 struct CommandDetails commandDetails[MAX_COMMANDS];
 int process_ptr = 0;
 
-void add_to_history(char* command, pid_t pid, struct timeval start, struct timeval end) {
+void add_to_history(char* command, pid_t pid, struct timeval start, struct timeval end,int status) {
     double duration = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1000000.0;
 
     commandDetails[process_ptr].command = strdup(command);
@@ -33,6 +34,7 @@ void add_to_history(char* command, pid_t pid, struct timeval start, struct timev
     commandDetails[process_ptr].start_time = start;
     commandDetails[process_ptr].end_time = end;
     commandDetails[process_ptr].duration = duration;
+    commandDetails[process_ptr].status = status;
     process_ptr++;
 }
 
@@ -309,8 +311,12 @@ int piped_process(char* command){
             fds = pipe_fd[0]; // Save read end for the next command
             waitpid(pid, &status, 0); // Wait for the child process
             gettimeofday(&end_time, NULL);  // Record end time
+
+            // Check if the command executed successfully
+            int success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+
             // Store details in history
-            add_to_history(command, pid, start_time, end_time);
+            add_to_history(command, pid, start_time, end_time,success);
         }
         free(comand); // Free dynamically allocated memory for the command
         free(exec); // Free the exec array if dynamically allocated
@@ -452,22 +458,24 @@ int create_process_and_run(char* command){
 
         if (execvp(command_type, args) == -1) {
             printf("Invalid Command\n");
-            return 0;
+            return 1;
         }
     } else if (pid < 0) {
         printf("Fork Failed\n");
         return 0;
     } else {
-        if(!amp){
-            waitpid(pid, &status, 0);
-            gettimeofday(&end_time, NULL);  // Record end time
-            // Store details in history
-            add_to_history(command, pid, start_time, end_time);
-        }else{
-            printf("Process running in background with ID: %d\n", pid);
-            fflush(stdout);
+        if(!amp) waitpid(pid, &status, 0);
+        else{
+            printf("Executing Process in Background With PID:%d\n",pid);
             status = 0;
         }
+        gettimeofday(&end_time, NULL);
+            
+        // Check if the command executed successfully
+        int success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        if(success == 1) success=0;
+            
+        add_to_history(command, pid, start_time, end_time,success);
     }
 
     // Free allocated memory
@@ -508,6 +516,10 @@ void shell_loop(){
         // exit(1);
 
         status = launch(command);
+        if(status==1 && process_ptr>0){
+            commandDetails[process_ptr-1].status = 1;
+            status = 0;
+        }
         free(command);
     }while(status==0);
 }
@@ -529,6 +541,9 @@ void exit_shell(){
         printf("PID: %d\n", cmd.pid);
         printf("Start Time: %s\n", start_str);
         printf("Duration: %.8f seconds\n", cmd.duration);
+        char* stat = "SUCCESS";
+        if(cmd.status==1) stat = "FAIL";
+        // printf("Status: %s\n",stat);
         printf("-----------------------------------\n");
     }
     exit(0);
